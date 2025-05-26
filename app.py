@@ -35,9 +35,10 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
 
 # Validar variables de entorno requeridas
-required_vars = ["VERIFY_TOKEN", "WHATSAPP_TOKEN", "PHONE_NUMBER_ID", "OPENAI_API_KEY"]
+required_vars = ["VERIFY_TOKEN", "WHATSAPP_TOKEN", "PHONE_NUMBER_ID", "OPENAI_API_KEY", "VECTOR_STORE_ID"]
 for var in required_vars:
     if not os.getenv(var):
         logger.error(f"Falta la variable de entorno requerida: {var}")
@@ -97,13 +98,14 @@ def download_media_file(media_id: str) -> Optional[str]:
         return None
 
 
-def get_openai_response_with_media(message: str, media_data: Optional[Dict] = None) -> str:
+def get_openai_response_with_media(message: str, media_data: Optional[Dict] = None, use_file_search: bool = True) -> str:
     """
-    Generar respuesta usando la Response API de OpenAI con soporte para multimedia
+    Generar respuesta usando la Response API de OpenAI con soporte para multimedia y file search
     
     Args:
         message (str): Mensaje de entrada del usuario
         media_data (Optional[Dict]): Datos multimedia si los hay
+        use_file_search (bool): Si usar búsqueda en archivos para respuestas basadas en conocimiento
         
     Returns:
         str: Respuesta generada por IA
@@ -111,7 +113,7 @@ def get_openai_response_with_media(message: str, media_data: Optional[Dict] = No
     try:
         # Preparar input según el tipo de contenido
         if media_data and media_data.get("type") == "image" and media_data.get("base64"):
-            # Para imágenes, usar formato con imagen
+            # Para imágenes, usar formato con imagen (sin file search por ahora)
             input_data = [
                 {
                     "role": "system",
@@ -131,9 +133,14 @@ def get_openai_response_with_media(message: str, media_data: Optional[Dict] = No
                     ]
                 }
             ]
+            # Para imágenes no usamos file search
+            response = openai_client.responses.create(
+                model="gpt-4.1",
+                input=input_data
+            )
         else:
             # Para texto y otros tipos de contenido
-            enhanced_message = f"Instrucciones del sistema: Eres un asistente útil de WhatsApp llamado WaChat Bot. Mantén las respuestas concisas y amigables. Siempre responde en español.\n\nMensaje del usuario: {message}"
+            enhanced_message = f"Instrucciones del sistema: Eres un asistente útil de WhatsApp llamado WaChat Bot. Mantén las respuestas concisas y amigables. Siempre responde en español. Si tienes información relevante en tu base de conocimientos, úsala para dar respuestas más precisas y específicas.\n\nMensaje del usuario: {message}"
             
             if media_data:
                 if media_data.get("type") == "location":
@@ -153,13 +160,25 @@ def get_openai_response_with_media(message: str, media_data: Optional[Dict] = No
                 elif media_data.get("type") == "audio":
                     enhanced_message += "\n\nEl usuario envió un mensaje de audio/voz"
             
-            input_data = enhanced_message
-        
-        # Usar la nueva Response API
-        response = openai_client.responses.create(
-            model="gpt-4.1",
-            input=input_data
-        )
+            # Usar Response API con file search si está habilitado
+            if use_file_search and VECTOR_STORE_ID:
+                response = openai_client.responses.create(
+                    model="gpt-4.1",
+                    input=enhanced_message,
+                    tools=[
+                        {
+                            "type": "file_search",
+                            "vector_store_ids": [VECTOR_STORE_ID]
+                        }
+                    ]
+                )
+                logger.info("Usando file search con vector store para respuesta")
+            else:
+                response = openai_client.responses.create(
+                    model="gpt-4.1",
+                    input=enhanced_message
+                )
+                logger.info("Respuesta sin file search")
         
         # Log de la respuesta para debugging
         logger.info(f"Respuesta de OpenAI Response API: {response.output_text}")
@@ -168,6 +187,10 @@ def get_openai_response_with_media(message: str, media_data: Optional[Dict] = No
         
     except Exception as e:
         logger.error(f"Error en la Response API de OpenAI: {str(e)}")
+        # Fallback sin file search si hay error
+        if use_file_search:
+            logger.info("Reintentando sin file search debido a error")
+            return get_openai_response_with_media(message, media_data, use_file_search=False)
         return "Lo siento, tengo problemas para procesar tu solicitud ahora. Por favor intenta de nuevo más tarde."
 
 
@@ -609,7 +632,8 @@ async def health_check():
             "verify_token": "✓" if VERIFY_TOKEN else "✗",
             "whatsapp_token": "✓" if WHATSAPP_TOKEN else "✗",
             "phone_number_id": "✓" if PHONE_NUMBER_ID else "✗",
-            "openai_key": "✓" if OPENAI_API_KEY else "✗"
+            "openai_key": "✓" if OPENAI_API_KEY else "✗",
+            "vector_store_id": "✓" if VECTOR_STORE_ID else "✗"
         }
     }
 
@@ -625,6 +649,31 @@ async def test_whatsapp_message(phone_number: str, message: str = "Mensaje de pr
         "message": message,
         "whatsapp_api_url": WHATSAPP_API_URL
     }
+
+
+@app.post("/test-file-search")
+async def test_file_search(query: str):
+    """Endpoint para probar file search con el vector store"""
+    logger.info(f"Probando file search con query: {query}")
+    try:
+        # Probar file search
+        response_with_search = get_openai_response_with_media(query, use_file_search=True)
+        
+        # Probar sin file search para comparación
+        response_without_search = get_openai_response_with_media(query, use_file_search=False)
+        
+        return {
+            "query": query,
+            "response_with_file_search": response_with_search,
+            "response_without_file_search": response_without_search,
+            "vector_store_id": VECTOR_STORE_ID
+        }
+    except Exception as e:
+        logger.error(f"Error en test de file search: {str(e)}")
+        return {
+            "error": str(e),
+            "query": query
+        }
 
 
 if __name__ == "__main__":
