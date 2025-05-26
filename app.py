@@ -180,7 +180,7 @@ def get_openai_response(message: str) -> str:
 
 def send_whatsapp_message(to_phone: str, message: str) -> bool:
     """
-    Enviar un mensaje a través de la API Cloud de WhatsApp
+    Enviar un mensaje de texto a través de la API Cloud de WhatsApp
     
     Args:
         to_phone (str): Número de teléfono del destinatario
@@ -202,7 +202,7 @@ def send_whatsapp_message(to_phone: str, message: str) -> bool:
     }
     
     try:
-        logger.info(f"Enviando mensaje a {to_phone}")
+        logger.info(f"Enviando mensaje de texto a {to_phone}")
         logger.info(f"URL: {WHATSAPP_API_URL}")
         logger.info(f"Payload: {payload}")
 
@@ -219,6 +219,135 @@ def send_whatsapp_message(to_phone: str, message: str) -> bool:
         return False
     except requests.exceptions.RequestException as e:
         logger.error(f"Request Error: {str(e)}")
+        return False
+
+
+def send_whatsapp_media(to_phone: str, media_type: str, media_id: str, caption: str = "") -> bool:
+    """
+    Enviar multimedia (imagen, audio, documento, sticker) a través de la API Cloud de WhatsApp
+    
+    Args:
+        to_phone (str): Número de teléfono del destinatario
+        media_type (str): Tipo de media ('image', 'audio', 'document', 'sticker')
+        media_id (str): ID del archivo multimedia de WhatsApp
+        caption (str): Texto opcional para acompañar el media
+        
+    Returns:
+        bool: True si el media se envió correctamente, False en caso contrario
+    """
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # Configurar payload según el tipo de media
+    if media_type == "sticker":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "sticker",
+            "sticker": {"id": media_id}
+        }
+    elif media_type == "image":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "image",
+            "image": {"id": media_id}
+        }
+        if caption:
+            payload["image"]["caption"] = caption
+    elif media_type == "audio":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "audio",
+            "audio": {"id": media_id}
+        }
+    elif media_type == "document":
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_phone,
+            "type": "document",
+            "document": {"id": media_id}
+        }
+        if caption:
+            payload["document"]["caption"] = caption
+    else:
+        logger.error(f"Tipo de media no soportado: {media_type}")
+        return False
+    
+    try:
+        logger.info(f"Enviando {media_type} a {to_phone} con ID: {media_id}")
+        logger.info(f"Payload: {payload}")
+
+        response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
+        
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Body: {response.text}")
+        
+        response.raise_for_status()
+        logger.info(f"{media_type.capitalize()} enviado exitosamente a {to_phone}")
+        return True
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error enviando {media_type}: {e}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request Error enviando {media_type}: {str(e)}")
+        return False
+
+
+def send_whatsapp_location(to_phone: str, latitude: float, longitude: float, name: str = "", address: str = "") -> bool:
+    """
+    Enviar ubicación a través de la API Cloud de WhatsApp
+    
+    Args:
+        to_phone (str): Número de teléfono del destinatario
+        latitude (float): Latitud de la ubicación
+        longitude (float): Longitud de la ubicación
+        name (str): Nombre del lugar (opcional)
+        address (str): Dirección del lugar (opcional)
+        
+    Returns:
+        bool: True si la ubicación se envió correctamente, False en caso contrario
+    """
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_phone,
+        "type": "location",
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude
+        }
+    }
+    
+    if name:
+        payload["location"]["name"] = name
+    if address:
+        payload["location"]["address"] = address
+    
+    try:
+        logger.info(f"Enviando ubicación a {to_phone}: {latitude}, {longitude}")
+        logger.info(f"Payload: {payload}")
+
+        response = requests.post(WHATSAPP_API_URL, headers=headers, json=payload)
+        
+        logger.info(f"Status Code: {response.status_code}")
+        logger.info(f"Response Body: {response.text}")
+        
+        response.raise_for_status()
+        logger.info(f"Ubicación enviada exitosamente a {to_phone}")
+        return True
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error enviando ubicación: {e}")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request Error enviando ubicación: {str(e)}")
         return False
 
 
@@ -414,13 +543,49 @@ async def handle_webhook(request: Request):
         # Generar respuesta de IA con contexto multimedia
         ai_response = get_openai_response_with_media(user_message, media_data)
         
-        # Enviar respuesta de vuelta a través de WhatsApp
-        success = send_whatsapp_message(user_phone, ai_response)
+        # Primero enviar la respuesta de texto
+        text_success = send_whatsapp_message(user_phone, ai_response)
         
-        if success:
+        # Luego, si hay multimedia, reenviar el archivo multimedia
+        media_success = True
+        if media_data and media_data.get("id"):
+            media_type = media_data.get("type")
+            media_id = media_data.get("id")
+            
+            if media_type == "sticker":
+                logger.info(f"Reenviando sticker con ID: {media_id}")
+                media_success = send_whatsapp_media(user_phone, "sticker", media_id)
+                
+            elif media_type == "image":
+                logger.info(f"Reenviando imagen con ID: {media_id}")
+                caption = f"Recibí esta imagen. {ai_response[:100]}..." if len(ai_response) > 100 else ai_response
+                media_success = send_whatsapp_media(user_phone, "image", media_id, caption)
+                
+            elif media_type == "audio":
+                logger.info(f"Reenviando audio con ID: {media_id}")
+                media_success = send_whatsapp_media(user_phone, "audio", media_id)
+                
+            elif media_type == "document":
+                logger.info(f"Reenviando documento con ID: {media_id}")
+                filename = media_data.get("filename", "documento")
+                caption = f"Recibí este documento: {filename}"
+                media_success = send_whatsapp_media(user_phone, "document", media_id, caption)
+                
+            elif media_type == "location":
+                logger.info("Reenviando ubicación")
+                lat = float(media_data.get("latitude", 0))
+                lng = float(media_data.get("longitude", 0))
+                name = media_data.get("name", "")
+                address = media_data.get("address", "")
+                media_success = send_whatsapp_location(user_phone, lat, lng, name, address)
+        
+        if text_success and media_success:
             logger.info("Procesamiento del mensaje completado exitosamente")
         else:
-            logger.error("Falló el envío de la respuesta de WhatsApp")
+            if not text_success:
+                logger.error("Falló el envío de la respuesta de texto")
+            if not media_success:
+                logger.error("Falló el envío del multimedia")
             
         return {"status": "ok"}
         
