@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: wachat-bot
+    env: python
+    plan: free
+    # Configuración de construcción
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    
+    # Configuración de verificación de salud
+    healthCheckPath: /health
+    
+    # Variables de entorno (configúralas en el dashboard de Render)
+    envVars:
+      - key: WHATSAPP_TOKEN
+        sync: false  # Configurar manualmente en el dashboard
+      - key: PHONE_NUMBER_ID
+        sync: false  # Configurar manualmente en el dashboard
+      - key: VERIFY_TOKEN
+        sync: false  # Configurar manualmente en el dashboard
+      - key: OPENAI_API_KEY
+        sync: false  # Configurar manualmente en el dashboard
+      - key: ENVIRONMENT
+        value: production
+        
+    # Configuración de auto-despliegue
+    autoDeploy: true
+    
+    # Configuración específica del plan gratuito
+    region: oregon  # Elige la región más cercana
+    
+    # Opcional: Configuración de dominio personalizado (para planes pagos)
+    # domains:
+    #   - tu-dominio-personalizado.com
